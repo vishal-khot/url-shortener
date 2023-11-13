@@ -10,8 +10,14 @@ import (
 
 func main() {
 	app := fiber.New()
+	app.Use(logger.New())
+	app.Static("/", "./static")
+
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.SendFile("./static/index.html")
+	})
 	app.Get("/:url", routes.ResolveURL)
 	app.Post("/shorten", routes.ShortenURL)
-	app.Use(logger.New())
+
 	log.Fatal(app.Listen(":8080"))
 }

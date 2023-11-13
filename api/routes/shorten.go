@@ -3,6 +3,9 @@ package routes
 import (
 	"crypto/sha1"
 	"encoding/base64"
+	"errors"
+	"net"
+	"net/url"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/gofiber/fiber/v2"
@@ -11,6 +14,27 @@ import (
 
 type reqBody struct {
 	UrlToShorten string `json:"urlToShorten"`
+}
+
+func isValidURL(tocheck string) (bool, error) {
+	uri, err := url.ParseRequestURI(tocheck)
+	if err != nil {
+		return false, err
+	}
+
+	switch uri.Scheme {
+	case "http":
+	case "https":
+	default:
+		return false, errors.New("invalid scheme")
+	}
+
+	_, err = net.LookupHost(uri.Host)
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 func ShortenURL(ctx *fiber.Ctx) error {
@@ -32,33 +56,43 @@ func ShortenURL(ctx *fiber.Ctx) error {
 		})
 	}
 
-	hash := sha1.New()
-	hash.Write([]byte(body.UrlToShorten))
-	shortenedUrl := baseUrl + "/" + base64.URLEncoding.EncodeToString(hash.Sum(nil))
+	valid, _ := isValidURL(body.UrlToShorten)
+	if valid {
+		hash := sha1.New()
+		hash.Write([]byte(body.UrlToShorten))
+		shortenedUrl := baseUrl + "/" + base64.URLEncoding.EncodeToString(hash.Sum(nil))[:8]
 
-	value, err := redisClient.Get(database.Ctx, shortenedUrl).Result()
-	if err == redis.Nil {
-		_, err := redisClient.Set(database.Ctx, shortenedUrl, body.UrlToShorten, 0).Result()
-		if err != nil {
-			return ctx.Status(fiber.StatusFound).JSON(&fiber.Map{
+		value, err := redisClient.Get(database.Ctx, shortenedUrl).Result()
+		if err == redis.Nil {
+			_, err := redisClient.Set(database.Ctx, shortenedUrl, body.UrlToShorten, 0).Result()
+			if err != nil {
+				return ctx.Status(fiber.StatusFound).JSON(&fiber.Map{
+					"error":    err,
+					"shortUrl": "",
+				})
+			} else {
+				return ctx.Status(fiber.StatusOK).JSON(&fiber.Map{
+					"error":       "",
+					"description": "URL shortened",
+					"shortUrl":    shortenedUrl,
+				})
+			}
+		} else if err != nil {
+			return ctx.Status(fiber.StatusInternalServerError).JSON(&fiber.Map{
 				"error":    err,
-				"shortUrl": "",
+				"shortUrl": value,
 			})
 		} else {
 			return ctx.Status(fiber.StatusOK).JSON(&fiber.Map{
-				"error":    "",
-				"shortUrl": shortenedUrl,
+				"error":       "",
+				"description": "URL already shortened",
+				"shortUrl":    shortenedUrl,
 			})
 		}
-	} else if err != nil {
-		return ctx.Status(fiber.StatusInternalServerError).JSON(&fiber.Map{
-			"error":    err,
-			"shortUrl": value,
-		})
 	} else {
-		return ctx.Status(fiber.StatusFound).JSON(&fiber.Map{
-			"error":    "URL already shortened",
-			"shortUrl": shortenedUrl,
+		return ctx.Status(fiber.StatusBadRequest).JSON(&fiber.Map{
+			"error":    "not a valid url",
+			"shortUrl": "",
 		})
 	}
 }
